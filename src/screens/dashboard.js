@@ -3,74 +3,159 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Modal, Tex
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator } from 'react-native';
 import { onAuthStateChanged } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, addDoc, Timestamp, query, orderBy, getDocs, limit } from 'firebase/firestore';
 import { auth, db } from '../config/firebase';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import {  useRoute,useNavigation } from '@react-navigation/native';
-import { Ionicons, MaterialIcons, FontAwesome5, Entypo, Feather } from '@expo/vector-icons';
+import { useRoute, useNavigation } from '@react-navigation/native';
 import Svg, { Circle } from "react-native-svg";
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback } from "react";
-import { collection, query, orderBy, getDocs, limit } from "firebase/firestore";
+import useBLE from '../screens/BleManager'; // 🔥 IMPORTANT
+import { useRef } from "react";
 
 
 
 const Dashboard = () => {
-  
+
+  const {
+  devices,
+  connectedDevice,
+  deviceData, // 🔥 ADD THIS LINE
+  startScan,
+  connectToDevice,
+  disconnectDevice
+} = useBLE();
+
   const [username, setUsername] = useState(null);
   const [loading, setLoading] = useState(true);
   const [height, setHeight] = useState(null);
   const [weight, setWeight] = useState(null);
   const [bmi, setBmi] = useState(null);
+const [modalVisible, setModalVisible] = useState(false);
   const navigation = useNavigation();
-  const [steps, setSteps] = useState(3200);
-  const [goal, setGoal] = useState(8000);
+
+  // 🔥 CHANGE: start with 0 (not static 3200)
+  const [steps, setSteps] = useState(0);
+
+  const [heartRate, setHeartRate] = useState(null);
+  const [spo2, setSpo2] = useState(null);
+
+  const [goal, setGoal] = useState(50);
   const [editVisible, setEditVisible] = useState(false);
   const [newGoal, setNewGoal] = useState(goal.toString());
+
   const route = useRoute();
-    
-  
-    const km = (steps * 0.0008).toFixed(2);
-    const kcal = (steps * 0.04).toFixed(0);
-    const progress = Math.min(steps / goal, 1)/2; // same progress for all arcs
-    
-  
-    const getOffset = (radius) =>  2 * Math.PI * radius * (1 - progress);
-     useEffect(() => {
+
+  // 🔥 BLE DATA UPDATE
+  useEffect(() => {
+    if (!deviceData) return;
+
+    if (deviceData.steps !== undefined) setSteps(deviceData.steps);
+    if (deviceData.hr !== undefined) setHeartRate(deviceData.hr);
+    if (deviceData.spo2 !== undefined) setSpo2(deviceData.spo2);
+
+  }, [deviceData]);
+
+  // 🔥 FIREBASE SAVE (FINAL FIX)
+ const lastSavedRef = useRef({
+  hr: null,
+  spo2: null,
+  steps: null,
+});
+
+const isConnectedRef = useRef(false); // update this on BLE connect
+
+useEffect(() => {
+  const user = auth.currentUser;
+  if (!user) return;
+
+  // ❌ Don't save if watch not connected
+  if (!isConnectedRef.current) return;
+
+  // ❌ Ignore empty/default data
+  if (
+    heartRate == null &&
+    spo2 == null &&
+    (steps == null || steps === 0)
+  ) {
+    return;
+  }
+
+  // ❌ Ignore if nothing changed
+  if (
+    heartRate === lastSavedRef.current.hr &&
+    spo2 === lastSavedRef.current.spo2 &&
+    steps === lastSavedRef.current.steps
+  ) {
+    return;
+  }
+
+  // ✅ Save data
+  const saveData = async () => {
+    try {
+      await addDoc(collection(db, "users", user.uid, "watchData"), {
+        steps: steps ?? 0,
+        hr: heartRate ?? null,
+        spo2: spo2 ?? null,
+        timestamp: Timestamp.now(),
+      });
+
+      // update last saved values
+      lastSavedRef.current = {
+        hr: heartRate,
+        spo2: spo2,
+        steps: steps,
+      };
+
+      console.log("✅ Saved (changed data only)");
+    } catch (e) {
+      console.log("❌ Save error:", e);
+    }
+  };
+
+  saveData();
+
+}, [heartRate, spo2, steps]);
+
+  // 🔥 KEEP YOUR ORIGINAL CALCULATIONS
+  const km = (steps * 0.0008).toFixed(2);
+  const kcal = (steps * 0.04).toFixed(0);
+  const progress = Math.min(steps / goal, 1) / 2;
+
+  const getOffset = (radius) => 2 * Math.PI * radius * (1 - progress);
+
+  useEffect(() => {
     if (route.params?.bmi) {
       setBmi(route.params.bmi);
     }
   }, [route.params?.bmi]);
 
+  useFocusEffect(
+    useCallback(() => {
+      const fetchLatestBMI = async () => {
+        try {
+          const user = auth.currentUser;
+          if (!user) return;
 
-    useFocusEffect(
-  useCallback(() => {
-    const fetchLatestBMI = async () => {
-      try {
-        const user = auth.currentUser;
-        if (!user) return;
+          const bmiRef = collection(db, "users", user.uid, "bmiRecords");
+          const q = query(bmiRef, orderBy("timestamp", "desc"), limit(1));
+          const querySnap = await getDocs(q);
 
-        const bmiRef = collection(db, "users", user.uid, "bmiRecords");
-        const q = query(bmiRef, orderBy("timestamp", "desc"), limit(1)); // latest BMI
-        const querySnap = await getDocs(q);
-
-        if (!querySnap.empty) {
-          const latest = querySnap.docs[0].data();
-          setBmi(latest.bmi);
-        } else {
-          setBmi(null);
+          if (!querySnap.empty) {
+            const latest = querySnap.docs[0].data();
+            setBmi(latest.bmi);
+          } else {
+            setBmi(null);
+          }
+        } catch (error) {
+          console.log("Error fetching latest BMI:", error);
         }
-      } catch (error) {
-        console.log("Error fetching latest BMI:", error);
-      }
-    };
+      };
 
-    fetchLatestBMI();
-  }, [])
-);
-    
+      fetchLatestBMI();
+    }, [])
+  );
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -79,10 +164,10 @@ const Dashboard = () => {
         setLoading(false);
         return;
       }
-  
+
       try {
         const snap = await getDoc(doc(db, "users", user.uid));
-  
+
         if (snap.exists()) {
           const data = snap.data();
           setUsername(data.username || "User");
@@ -90,12 +175,12 @@ const Dashboard = () => {
           setWeight(data.weight || null);
 
           if (data.height && data.weight) {
-        const hMeters = data.height / 100;
-        const bmiValue = (data.weight / (hMeters * hMeters)).toFixed(1);
-        setBmi(bmiValue);
-      } else {
-        setBmi(null);
-      }
+            const hMeters = data.height / 100;
+            const bmiValue = (data.weight / (hMeters * hMeters)).toFixed(1);
+            setBmi(bmiValue);
+          } else {
+            setBmi(null);
+          }
         } else {
           setUsername("User");
         }
@@ -105,17 +190,11 @@ const Dashboard = () => {
       } finally {
         setLoading(false);
       }
-      useFocusEffect(
-    useCallback(() => {
-      fetchUserData();
-    }, [])
-  );
     });
-  
+
     return unsubscribe;
   }, []);
-  
-  // Show spinner until we determine the username
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -125,11 +204,16 @@ const Dashboard = () => {
   }
 
   return (
+    // ⚠️ KEEP YOUR EXISTING UI EXACT SAME (DO NOT CHANGE ANYTHING BELOW)
     <SafeAreaProvider>
      <View style={styles.container}>
     <ScrollView style={styles.container} contentContainerStyle={{paddingBottom: 1}}>
       {/* Steps Section */}
-      <View style={styles.stepsContainer}>
+      <TouchableOpacity
+  style={styles.stepsContainer}
+  activeOpacity={0.8}
+  onPress={() => navigation.navigate("Steps")}
+>
 <View style={styles.progressContainer}>
         <Svg height="180" width="360" viewBox="0 0 360 180">
           {/* Background arcs */}
@@ -248,27 +332,30 @@ const Dashboard = () => {
                 </View>
               </View>
             </Modal>
-      </View>
+      </TouchableOpacity>
 
 
     <View style={styles.grid}>
-      <TouchableOpacity style={styles.gridItem} onPress={() => navigation.navigate('Heartrate')}
-         activeOpacity={0.8}>  
+      <TouchableOpacity style={styles.gridItem} onPress={() => navigation.navigate('Heartrate')} activeOpacity={0.8}>  
           <Text style={styles.healthLabel}>Heart Rate</Text>
-          <Text style={styles.noDataSubText}>No Data</Text>
+          <Text style={styles.noDataSubText}>
+            {heartRate ? `${heartRate} bpm` : "No Data"}
+          </Text>
           <Image 
               source={require('../../assets/Heartrate.png')} 
               style={styles.icon} 
           />
       </TouchableOpacity>  
-        <View style={styles.gridItem}>
+      <TouchableOpacity style={styles.gridItem} onPress={() => navigation.navigate('Spo2')} activeOpacity={0.8}>
           <Text style={styles.healthLabel}>SPO2</Text>
-          <Text style={styles.noDataSubText}>No Data</Text>
+          <Text style={styles.noDataSubText}>
+              {spo2 ? `${spo2}%` : "No Data"}
+          </Text>
           <Image 
               source={require('../../assets/spo2logo.png')} 
               style={styles.icon} 
           />
-        </View>
+       </TouchableOpacity>
 
         <TouchableOpacity style={styles.gridItem} onPress={() => navigation.navigate('BmiScreen')}
          activeOpacity={0.8}
@@ -281,22 +368,90 @@ const Dashboard = () => {
           />
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.gridItem} onPress={() => navigation.navigate('BLEScreen')}
-         activeOpacity={0.8}
-       > 
-          <Text style={styles.healthLabel}>Watch</Text>
-          <Text style={styles.noDataSubText}>Data</Text>
-          <Image 
-              source={require('../../assets/temporary.png')} 
-              style={styles.icon} 
-          />
-        </TouchableOpacity>
+        <View style={styles.gridItem}>
+
+  <Text style={styles.healthLabel}>Watch</Text>
+
+  {/* STATUS */}
+  <Text style={styles.noDataSubText}>
+    {connectedDevice ? connectedDevice.name : "Not Connected"}
+  </Text>
+
+  {/* CONNECT / DISCONNECT BUTTON */}
+  {!connectedDevice ? (
+    <TouchableOpacity
+      onPress={() => {
+        startScan();
+        setModalVisible(true);
+      }}
+      activeOpacity={0.7}
+    >
+      <Text style={{ color: "#52a8ff", marginBottom: 8 }}>
+        Connect Watch
+      </Text>
+    </TouchableOpacity>
+  ) : (
+    <TouchableOpacity
+      onPress={disconnectDevice}
+      activeOpacity={0.7}
+    >
+      <Text style={{ color: "red", marginBottom: 8 }}>
+        Disconnect
+      </Text>
+    </TouchableOpacity>
+  )}
+
+  {/* KEEP IMAGE SAME */}
+  <Image 
+    source={require('../../assets/temporary.png')} 
+    style={styles.icon} 
+  />
+
+</View>
       </View>
 {/* 
       <TouchableOpacity style={styles.changeOrderButton}>
         <Text style={styles.changeOrderText}>Change Order</Text>
       </TouchableOpacity> */}
     </ScrollView>
+    <Modal visible={modalVisible} transparent animationType="slide">
+  <View style={{
+    flex:1,
+    backgroundColor:'rgba(0,0,0,0.6)',
+    justifyContent:'center',
+    alignItems:'center'
+  }}>
+    <View style={{
+      backgroundColor:'#fff',
+      width:'80%',
+      maxHeight:400,
+      borderRadius:10,
+      padding:10
+    }}>
+      <ScrollView>
+        {devices.map(d => (
+          <TouchableOpacity
+            key={d.id}
+            style={{ padding:15, borderBottomWidth:1, borderBottomColor:'#ddd' }}
+            onPress={() => {
+              connectToDevice(d);
+              setModalVisible(false);
+            }}
+          >
+            <Text>{d.name}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
+      <TouchableOpacity
+        onPress={() => setModalVisible(false)}
+        style={{ backgroundColor:'#007AFF', padding:10, borderRadius:8, marginTop:10 }}
+      >
+        <Text style={{ color:'#fff', textAlign:'center' }}>Close</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+</Modal>
     </View>
     </SafeAreaProvider>
   );

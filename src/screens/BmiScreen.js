@@ -6,8 +6,6 @@ import {
   Dimensions,
   TouchableOpacity,
   TextInput,
-  TouchableWithoutFeedback,
-  Keyboard,
   ScrollView,
 } from "react-native";
 import { auth, db } from "../config/firebase";
@@ -29,14 +27,40 @@ const screenWidth = Dimensions.get("window").width;
 
 export default function BmiScreen() {
   const [bmiRecords, setBmiRecords] = useState([]);
-  const [selectedPoint, setSelectedPoint] = useState(null);
   const [showEditForm, setShowEditForm] = useState(false);
   const [height, setHeight] = useState("");
   const [weight, setWeight] = useState("");
   const [loading, setLoading] = useState(true);
 
+  // ---------- SAFE BMI HELPERS ----------
+  const getBMICategory = (bmi) => {
+    if (!bmi || isNaN(bmi)) return "";
+    if (bmi < 18.5) return "Underweight";
+    if (bmi < 25) return "Normal";
+    if (bmi < 30) return "Overweight";
+    return "Obese";
+  };
 
-  // Fetch BMI records
+  const getBMIColor = (bmi) => {
+    if (!bmi || isNaN(bmi)) return "#fff";
+    if (bmi < 18.5) return "#3498db";
+    if (bmi < 25) return "#2ecc71";
+    if (bmi < 30) return "#f39c12";
+    return "#e74c3c";
+  };
+
+  const getBMIAdvice = (bmi) => {
+    if (!bmi || isNaN(bmi)) return "";
+    if (bmi < 18.5)
+      return "You are underweight. Increase calorie intake & strength training.";
+    if (bmi < 25)
+      return "You are in a healthy range. Maintain your lifestyle!";
+    if (bmi < 30)
+      return "Slightly overweight. Add cardio & balanced diet.";
+    return "Obese range. Consult doctor & focus on structured weight loss.";
+  };
+
+  // ---------- FETCH BMI DATA ----------
   const fetchBMIData = async () => {
     try {
       const user = auth.currentUser;
@@ -51,11 +75,10 @@ export default function BmiScreen() {
         ...doc.data(),
       }));
 
-      // Filter and keep only valid BMI values
       const validData = data
-        .filter((item) => !isNaN(parseFloat(item.bmi)))
+        .filter((item) => item.bmi && !isNaN(Number(item.bmi)))
         .slice(0, 7)
-        .reverse(); // last 7 in correct order
+        .reverse();
 
       setBmiRecords(validData);
     } catch (error) {
@@ -65,11 +88,12 @@ export default function BmiScreen() {
     }
   };
 
-  // Fetch current user data
+  // ---------- FETCH USER DATA ----------
   const fetchUserData = async () => {
     try {
       const user = auth.currentUser;
       if (!user) return;
+
       const userDoc = await getDoc(doc(db, "users", user.uid));
       if (userDoc.exists()) {
         const d = userDoc.data();
@@ -86,46 +110,42 @@ export default function BmiScreen() {
     fetchBMIData();
   }, []);
 
-
+  // ---------- HANDLE EDIT ----------
   const handleEdit = async () => {
-  try {
-    const user = auth.currentUser;
-    if (!user) return;
+    try {
+      const user = auth.currentUser;
+      if (!user) return;
 
-    const h = parseFloat(height);
-    const w = parseFloat(weight);
+      const h = parseFloat(height);
+      const w = parseFloat(weight);
 
-    if (!h || !w) {
-      alert("Please enter valid height and weight");
-      return;
+      if (!h || !w) {
+        alert("Please enter valid height and weight");
+        return;
+      }
+
+      const bmi = Number((w / ((h / 100) ** 2)).toFixed(1));
+      const now = new Date();
+
+      await updateDoc(doc(db, "users", user.uid), {
+        height: h,
+        weight: w,
+      });
+
+      await addDoc(collection(db, "users", user.uid, "bmiRecords"), {
+        bmi: bmi,
+        height: h,
+        weight: w,
+        timestamp: Timestamp.fromDate(now),
+      });
+
+      setShowEditForm(false);
+      fetchBMIData();
+    } catch (e) {
+      console.log("Error updating BMI:", e);
+      alert("Failed to update BMI");
     }
-
-    const bmi = Number((w / ((h / 100) ** 2)).toFixed(1));
-    const now = new Date();
-
-    // Update user height/weight
-    await updateDoc(doc(db, "users", user.uid), {
-      height: h,
-      weight: w,
-    });
-
-    // Add new BMI record
-    await addDoc(collection(db, "users", user.uid, "bmiRecords"), {
-      bmi: bmi,
-      height: h,
-      weight: w,
-      date: now.toISOString().split("T")[0],
-      timestamp: Timestamp.fromDate(now),
-    });
-
-    setShowEditForm(false); // hide form
-    fetchBMIData(); // reload chart
-  } catch (e) {
-    console.log("Error updating BMI:", e);
-    alert("Failed to update BMI");
-  }
-};
-
+  };
 
   if (loading) {
     return (
@@ -135,136 +155,119 @@ export default function BmiScreen() {
     );
   }
 
+  // ---------- SAFE DATA PROCESSING ----------
   const bmiValues = bmiRecords
-  .map((item) => {
-    const val = Number(item.bmi);
-    return isNaN(val) ? null : val;
-  })
-  .filter((v) => v !== null);
+    .map((item) => Number(item.bmi))
+    .filter((val) => !isNaN(val));
 
+  const labels = bmiRecords.map((item) => {
+    if (!item.timestamp) return "";
 
-  const labels = bmiRecords
-    .filter((item) => !isNaN(parseFloat(item.bmi)))
-    .map((item) => {
-      const d = item.timestamp.toDate();
-      return `${d.getDate()}/${d.getMonth() + 1}`;
-    });
+    try {
+      let dateObj;
 
-  const currentBmi = bmiValues[bmiValues.length - 1] || "--";
+      if (item.timestamp.toDate) {
+        dateObj = item.timestamp.toDate();
+      } else {
+        dateObj = new Date(item.timestamp);
+      }
+
+      return `${dateObj.getDate()}/${dateObj.getMonth() + 1}`;
+    } catch {
+      return "";
+    }
+  });
+
+  const currentBmi =
+    bmiValues.length > 0 ? bmiValues[bmiValues.length - 1] : null;
+
+  const idealMin =
+    height && currentBmi
+      ? (18.5 * (height / 100) ** 2).toFixed(1)
+      : null;
+
+  const idealMax =
+    height && currentBmi
+      ? (24.9 * (height / 100) ** 2).toFixed(1)
+      : null;
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#121212", alignItems: "center" }}>
-    <TouchableWithoutFeedback onPress={() => setSelectedPoint(null)}>
+    <View style={{ flex: 1, backgroundColor: "#121212" }}>
       <ScrollView contentContainerStyle={styles.container}>
         <Text style={styles.title}>BMI Tracker</Text>
 
+        {/* INFO CARD */}
         <View style={styles.infoCard}>
-          <Text style={styles.infoText}>Current Height: {height || "--"} cm</Text>
-          <Text style={styles.infoText}>Current Weight: {weight || "--"} kg</Text>
-          <Text style={styles.infoText}>Current BMI: {currentBmi}</Text>
-        </View>
-        <TouchableOpacity
-  style={styles.editBtn}
-  onPress={() => setShowEditForm(true)}
->
-  
-  <Text style={styles.editText}>Edit Height & Weight</Text>
-</TouchableOpacity>
+          <Text style={styles.infoText}>Height: {height || "--"} cm</Text>
+          <Text style={styles.infoText}>Weight: {weight || "--"} kg</Text>
 
-{showEditForm && (
-  <TouchableWithoutFeedback onPress={() => setShowEditForm(false)}>
-    <View style={styles.overlay}>
-      <TouchableWithoutFeedback>
-        <View style={styles.editForm}>
-          <Text style={styles.formTitle}>Edit Height & Weight</Text>
+          <Text style={[styles.infoText, { fontSize: 18 }]}>
+            BMI:{" "}
+            <Text
+              style={{
+                color: getBMIColor(currentBmi),
+                fontWeight: "bold",
+              }}
+            >
+              {currentBmi || "--"}
+            </Text>
+          </Text>
 
-          <Text style={styles.label}>Height (cm)</Text>
-          <TextInput
-            style={styles.input}
-            value={height}
-            onChangeText={setHeight}
-            keyboardType="numeric"
-          />
-
-          <Text style={styles.label}>Weight (kg)</Text>
-          <TextInput
-            style={styles.input}
-            value={weight}
-            onChangeText={setWeight}
-            keyboardType="numeric"
-          />
-
-          <TouchableOpacity style={styles.saveBtn} onPress={handleEdit}>
-            <Text style={styles.saveText}>Save</Text>
-          </TouchableOpacity>
-        </View>
-      </TouchableWithoutFeedback>
-    </View>
-  </TouchableWithoutFeedback>
-)}
-
-
-
-        {bmiValues.length > 0 ? (
-          <View>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <LineChart
-  data={{
-    labels: labels,
-    datasets: [{ data: bmiValues }],
-  }}
-  width={Math.max(screenWidth, bmiValues.length * 80)}
-  height={250}
-  chartConfig={{
-    backgroundColor: "#202020",
-    backgroundGradientFrom: "#202020",
-    backgroundGradientTo: "#202020",
-    color: (opacity = 1) => `rgba(255,127,36,${opacity})`,
-    labelColor: (opacity = 1) => `rgba(255,255,255,${opacity})`,
-    propsForDots: {
-      r: "5",
-      strokeWidth: "2",
-      stroke: "#ffa726",
-    },
-  }}
-  bezier
-  style={{ marginVertical: 8, borderRadius: 16 }}
-  verticalLabelRotation={-20}
-  renderDotContent={({ x, y, index }) => (
-    <Text
-      key={index}
-      style={{
-        position: "absolute",
-        left: x - 10,
-        top: y - 20,
-        color: "#ff7f24",
-        fontSize: 12,
-        fontWeight: "bold",
-      }}
-    >
-      {bmiValues[index]}
-    </Text>
-  )}
-/>
-
-            </ScrollView>
-
-            {selectedPoint && (
-              <View
+          {currentBmi && (
+            <>
+              <Text
                 style={{
-                  position: "absolute",
-                  left: selectedPoint.x + 15,
-                  top: selectedPoint.y + 100,
+                  color: getBMIColor(currentBmi),
+                  fontWeight: "600",
+                  marginTop: 5,
                 }}
               >
-                <Text style={styles.pointText}>{selectedPoint.value}</Text>
-              </View>
-            )}
-          </View>
-        ) : (
-          <Text style={styles.noData}>No BMI data available</Text>
+                {getBMICategory(currentBmi)}
+              </Text>
+
+              <Text style={{ color: "#ccc", marginTop: 5 }}>
+                Healthy BMI Range: 18.5 – 24.9
+              </Text>
+
+              {idealMin && (
+                <Text style={{ color: "#ccc", marginTop: 5 }}>
+                  Ideal Weight Range: {idealMin}kg – {idealMax}kg
+                </Text>
+              )}
+
+              <Text style={{ color: "#aaa", marginTop: 8 }}>
+                {getBMIAdvice(currentBmi)}
+              </Text>
+            </>
+          )}
+        </View>
+
+        {/* CHART */}
+        {bmiValues.length > 0 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <LineChart
+              data={{
+                labels: labels,
+                datasets: [{ data: bmiValues }],
+              }}
+              width={Math.max(screenWidth, bmiValues.length * 80)}
+              height={250}
+              chartConfig={{
+                backgroundColor: "#202020",
+                backgroundGradientFrom: "#202020",
+                backgroundGradientTo: "#202020",
+                decimalPlaces: 1,
+                color: (opacity = 1) =>
+                  `rgba(255,127,36,${opacity})`,
+                labelColor: () => "#fff",
+              }}
+              bezier
+              style={{ borderRadius: 16 }}
+            />
+          </ScrollView>
         )}
 
+        {/* EDIT BUTTON */}
         <TouchableOpacity
           style={styles.editBtn}
           onPress={() => setShowEditForm(true)}
@@ -273,46 +276,41 @@ export default function BmiScreen() {
           <Text style={styles.editText}>Edit Height & Weight</Text>
         </TouchableOpacity>
 
+        {/* EDIT FORM */}
         {showEditForm && (
-          <TouchableWithoutFeedback onPress={() => setShowEditForm(false)}>
-            <View style={styles.overlay}>
-              <TouchableWithoutFeedback>
-                <View style={styles.editForm}>
-                  <Text style={styles.formTitle}>Edit Height & Weight</Text>
+          <View style={styles.overlay}>
+            <View style={styles.editForm}>
+              <Text style={styles.formTitle}>Edit Height & Weight</Text>
 
-                  <Text style={styles.label}>Height (cm)</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={height}
-                    onChangeText={setHeight}
-                    keyboardType="numeric"
-                  />
+              <Text style={styles.label}>Height (cm)</Text>
+              <TextInput
+                style={styles.input}
+                value={height}
+                onChangeText={setHeight}
+                keyboardType="numeric"
+              />
 
-                  <Text style={styles.label}>Weight (kg)</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={weight}
-                    onChangeText={setWeight}
-                    keyboardType="numeric"
-                  />
+              <Text style={styles.label}>Weight (kg)</Text>
+              <TextInput
+                style={styles.input}
+                value={weight}
+                onChangeText={setWeight}
+                keyboardType="numeric"
+              />
 
-                  <TouchableOpacity style={styles.saveBtn} onPress={handleEdit}>
-                    <Text style={styles.saveText}>Save</Text>
-                  </TouchableOpacity>
-                </View>
-              </TouchableWithoutFeedback>
+              <TouchableOpacity style={styles.saveBtn} onPress={handleEdit}>
+                <Text style={styles.saveText}>Save</Text>
+              </TouchableOpacity>
             </View>
-          </TouchableWithoutFeedback>
+          </View>
         )}
       </ScrollView>
-    </TouchableWithoutFeedback>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: "#121212",
     alignItems: "center",
     paddingBottom: 60,
   },
@@ -334,27 +332,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginVertical: 2,
   },
-  chartStyle: {
-    borderRadius: 16,
-    marginVertical: 8,
-  },
-  pointText: {
-    color: "#ff7f24",
-    fontWeight: "600",
-    fontSize: 14,
-  },
-  noData: {
-    color: "gray",
-    marginVertical: 20,
-  },
   editBtn: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#ff7f24",
     padding: 10,
     borderRadius: 10,
-    marginTop: 7,
-    marginBottom:20,
+    marginTop: 10,
   },
   editText: {
     color: "#fff",

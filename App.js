@@ -22,8 +22,11 @@ import SignUp from './src/screens/SignUp';
 import BmiScreen from './src/screens/BmiScreen';
 import PersonalDetails from './src/screens/PersonalDetails';
 import Heartrate from './src/screens/Heartrate';
+import Spo2 from './src/screens/spo2';
+import Steps from './src/screens/Steps';
 import EditProfile from './src/screens/EditProfile';
 import BLEScreen from './src/screens/BLEScreen';
+import AvatarSelect from './src/screens/AvatarSelect';
 
 
 // Screen names
@@ -109,13 +112,30 @@ const App = () => {
     headerStyle: { backgroundColor: "#202020" },
     headerTitleStyle: { color: "white", fontSize: 20 },
     headerTintColor: "white",   }}/>
+    <Stack.Screen name="Spo2" component={Spo2} options={{ headerShown: true,
+    title: 'SPO2',
+    headerStyle: { backgroundColor: "#202020" },
+    headerTitleStyle: { color: "white", fontSize: 20 },
+    headerTintColor: "white",   }}/>
+    <Stack.Screen name="Steps" component={Steps} options={{ headerShown: true,
+    title: 'Steps',
+    headerStyle: { backgroundColor: "#202020" },
+    headerTitleStyle: { color: "white", fontSize: 20 },
+    headerTintColor: "white",   }}/>
         <Stack.Screen name="EditProfile" component={EditProfile} options={{
     headerShown: true,
     title: 'Edit Profile',
     headerStyle: { backgroundColor: "#202020" },
     headerTitleStyle: { color: "white", fontSize: 20 },
     headerTintColor: "white",                         
-  }}/>      
+  }}/> 
+  <Stack.Screen name="AvatarSelect" component={AvatarSelect} options={{
+    headerShown: true,
+    title: 'Edit Profile',
+    headerStyle: { backgroundColor: "#202020" },
+    headerTitleStyle: { color: "white", fontSize: 20 },
+    headerTintColor: "white",                         
+  }} />     
       </Stack.Navigator>
     </NavigationContainer>
   );

@@ -1,5 +1,13 @@
 import React, { useState, useEffect } from "react";
-import { View, Text, TextInput, Button, StyleSheet, TouchableOpacity, Platform, ScrollView } from "react-native";
+import {
+  View,
+  Text,
+  TextInput,
+  Button,
+  StyleSheet,
+  TouchableOpacity,
+  Platform
+} from "react-native";
 import { auth, db } from "../config/firebase";
 import { doc, setDoc, Timestamp, getDoc, collection, addDoc } from "firebase/firestore";
 import DateTimePicker from "@react-native-community/datetimepicker";
@@ -8,299 +16,311 @@ import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view
 import { useNavigation } from '@react-navigation/native';
 
 export default function PersonalDetails() {
-  const [step, setStep] = useState(1); // Step 1 = personal details, Step 2 = set goals
-  const navigation = useNavigation(); 
+
+  const navigation = useNavigation();
   const now = new Date();
-  // Personal details
+
   const [name, setName] = useState("");
-  const [birthday, setBirthday] = useState(null);
+
+  // ✅ DOB states (UPDATED)
+  const [birthday, setBirthday] = useState("");
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [error, setError] = useState("");
+
   const [height, setHeight] = useState("");
   const [heightUnit, setHeightUnit] = useState("cm");
   const [openHeight, setOpenHeight] = useState(false);
-  const [heightUnits, setHeightUnits] = useState([
-    { label: "cm", value: "cm" },
-    { label: "ft", value: "ft" }
-  ]);
 
   const [weight, setWeight] = useState("");
   const [weightUnit, setWeightUnit] = useState("kg");
   const [openWeight, setOpenWeight] = useState(false);
-  const [weightUnits, setWeightUnits] = useState([
-    { label: "kg", value: "kg" },
-    { label: "lbs", value: "lbs" }
-  ]);
 
-  // Goals
-  const [targetWeight, setTargetWeight] = useState(""); 
-  const [stepsGoal, setStepsGoal] = useState(""); 
+  const INPUT_HEIGHT = 50;
 
-  const INPUT_HEIGHT = 50; // consistent input & dropdown height
   useEffect(() => {
-  const fetchUserName = async () => {
+    const fetchUserName = async () => {
+      const user = auth.currentUser;
+      if (!user) return;
+
+      const userSnap = await getDoc(doc(db, "users", user.uid));
+      if (userSnap.exists()) {
+        const data = userSnap.data();
+        if (data.username) setName(data.username);
+      }
+    };
+
+    fetchUserName();
+  }, []);
+
+  // ✅ DOB typing handler
+  const handleDateChange = (text) => {
+  let cleaned = text.replace(/[^0-9]/g, "");
+
+  let formatted = "";
+
+  if (cleaned.length <= 2) {
+    formatted = cleaned;
+  } else if (cleaned.length <= 4) {
+    formatted = cleaned.slice(0, 2) + "/" + cleaned.slice(2);
+  } else {
+    formatted =
+      cleaned.slice(0, 2) +
+      "/" +
+      cleaned.slice(2, 4) +
+      "/" +
+      cleaned.slice(4, 8);
+  }
+
+  setBirthday(formatted);
+};
+
+  // ✅ Convert string → Date
+  const parseDate = () => {
+    const regex = /^(0[1-9]|[12][0-9]|3[01])\/(0[1-9]|1[0-2])\/(19|20)\d\d$/;
+
+    if (!regex.test(birthday)) {
+      setError("Enter valid date DD/MM/YYYY");
+      return null;
+    }
+
+    const [day, month, year] = birthday.split("/").map(Number);
+    const date = new Date(year, month - 1, day);
+
+    if (date > new Date()) {
+      setError("Future date not allowed");
+      return null;
+    }
+
+    setError("");
+    return date;
+  };
+
+  // ✅ Age calculation
+  const calculateAge = (dob) => {
+    const today = new Date();
+    let age = today.getFullYear() - dob.getFullYear();
+
+    const m = today.getMonth() - dob.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) {
+      age--;
+    }
+
+    return age;
+  };
+
+  const handleSave = async () => {
     try {
       const user = auth.currentUser;
       if (!user) return;
 
-      const userRef = doc(db, "users", user.uid);
-      const userSnap = await getDoc(userRef);
+      let heightCm = Number(height);
+      if (heightUnit === "ft") heightCm *= 30.48;
+      heightCm = Number(heightCm.toFixed(2)); // ✅ FIX
 
-      if (userSnap.exists()) {
-        const data = userSnap.data();
-        if (data.username) {
-          setName(data.username); // ✅ changed from data.name → data.username
-        }
+      let weightKg = Number(weight);
+      if (weightUnit === "lbs") weightKg /= 2.20462;
+      weightKg = Number(weightKg.toFixed(2)); // ✅ FIX
+
+      if (!heightCm || !weightKg) {
+        alert("Enter valid height & weight");
+        return;
       }
-    } catch (error) {
-      console.error("Error fetching username:", error);
-    }
-  };
 
-  fetchUserName();
-}, []);
+      // ✅ DOB processing
+      const dobDate = parseDate();
+      if (!dobDate) return;
 
+      const age = calculateAge(dobDate);
 
-  const calculateBMI = (weightKg, heightCm) => {
-    const heightM = heightCm / 100;
-    return weightKg / (heightM * heightM);
-  };
+      // ✅ Save to Firebase
+      await setDoc(
+        doc(db, "users", user.uid),
+        {
+          username: name,
+          birthday: Timestamp.fromDate(dobDate),
+          age: age, // 🔥 NEW
+          height: heightCm,
+          weight: weightKg,
+        },
+        { merge: true }
+      );
 
-  const suggestTargetWeight = (heightCm) => {
-    return (22.5 * (heightCm / 100) ** 2).toFixed(1);
-  };
+      const bmi = Number((weightKg / ((heightCm / 100) ** 2)).toFixed(1));
 
-  const distanceFromSteps = (steps) => (steps * 0.762 / 1000).toFixed(2); // km
-  const caloriesFromSteps = (steps, weightKg) => Math.round(steps * 0.04 * weightKg);
-
-  const handleNext = () => {
-    let heightCm = Number(height);
-    if (heightUnit === "ft") heightCm = height * 30.48;
-    let weightKg = Number(weight);
-    if (weightUnit === "lbs") weightKg = weight / 2.20462;
-
-    setTargetWeight(suggestTargetWeight(heightCm));
-    setStepsGoal("6000");
-
-    setStep(2);
-  };
-
- const handleSave = async () => {
-  try {
-    const user = auth.currentUser;
-    if (!user) {
-      alert("No user logged in!");
-      return;
-    }
-
-    let heightCm = Number(height);
-    if (heightUnit === "ft") heightCm = height * 30.48;
-
-    let weightKg = Number(weight);
-    if (weightUnit === "lbs") weightKg = weight / 2.20462;
-
-    let targetKg = Number(targetWeight);
-
-    // Save basic user details
-    await setDoc(
-      doc(db, "users", user.uid),
-      {
-        name,
-        birthday: birthday ? Timestamp.fromDate(birthday) : null,
+      await addDoc(collection(db, "users", user.uid, "bmiRecords"), {
+        date: now.toISOString().split("T")[0],
+        timestamp: Timestamp.fromDate(now),
         height: heightCm,
         weight: weightKg,
-        targetWeight: targetKg,
-        stepsGoal: Number(stepsGoal),
-      },
-      { merge: true }
-    );
+        bmi: bmi,
+      });
 
-    // 🔹 Save BMI record (add this below)
-   const bmi = Number((weightKg / ((heightCm / 100) ** 2)).toFixed(1));
+      alert("Saved successfully!");
+      navigation.replace("MainTabs");
 
-await addDoc(collection(db, "users", user.uid, "bmiRecords"), {
-  date: now.toISOString().split("T")[0], // human-readable date
-  timestamp: Timestamp.fromDate(now),   // exact time
-  height: heightCm,
-  weight: weightKg,
-  bmi: bmi,  // numeric now
-});
-
-    alert("Details & Goals saved!");
-    navigation.replace("MainTabs");
-  } catch (error) {
-    console.error("Error saving:", error);
-    alert("Failed to save data");
-  }
-};
+    } catch (error) {
+      console.log(error);
+      alert("Error saving data");
+    }
+  };
 
   return (
-   <KeyboardAwareScrollView
-  contentContainerStyle={styles.container}
-  extraScrollHeight={20}
-  enableOnAndroid={true}
-  keyboardShouldPersistTaps="handled"
->
+    <KeyboardAwareScrollView
+      contentContainerStyle={styles.container}
+      keyboardShouldPersistTaps="handled"
+    >
       <View style={styles.formBox}>
-        {step === 1 ? (
-          <>
-            <Text style={styles.heading}>Enter Your Details</Text>
 
-            <TextInput
-              style={[styles.input, { height: INPUT_HEIGHT }]}
-              placeholder="Name"
-              placeholderTextColor="#aaa"
-              value={name}
-              onChangeText={setName}
-            />
+        <Text style={styles.heading}>Enter Your Details</Text>
 
-            <TouchableOpacity onPress={() => setShowDatePicker(true)}>
-              <TextInput
-                style={[styles.input, { height: INPUT_HEIGHT }]}
-                placeholder="Birthday"
-                placeholderTextColor="#aaa"
-                value={birthday ? birthday.toISOString().split("T")[0] : ""}
-                editable={false}
-              />
-            </TouchableOpacity>
-            {showDatePicker && (
-              <DateTimePicker
-                value={birthday || new Date()}
-                mode="date"
-                display={Platform.OS === "ios" ? "spinner" : "default"}
-                onChange={(e, d) => {
-                  setShowDatePicker(false);
-                  if (d) setBirthday(d);
-                }}
-              />
-            )}
+        <TextInput style={styles.input} value={name} editable={false} />
 
-            {/* Height Row */}
-            <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 15, overflow: "visible", zIndex: 5000 }}>
-              <TextInput
-                style={[styles.input, { flex: 1, marginRight: 10, height: INPUT_HEIGHT }]}
-                placeholder="Height"
-                placeholderTextColor="#aaa"
-                value={height}
-                onChangeText={setHeight}
-                keyboardType="numeric"
-              />
-              <DropDownPicker
-                open={openHeight}
-  value={heightUnit}
-  items={heightUnits}
-  setOpen={(val) => {
-    setOpenHeight(val);
-    if (val) setOpenWeight(false);
-  }}
-  setValue={setHeightUnit}
-  setItems={setHeightUnits}
-  containerStyle={{ width: 100, height: INPUT_HEIGHT }}
-  style={{ backgroundColor: "#2a2a2a", borderColor: "#555", height: INPUT_HEIGHT }}
-  dropDownContainerStyle={{ backgroundColor: "#2a2a2a", borderColor: "#555" }}
-  textStyle={{ color: "#fff", fontSize: 16 }}
-  nestedScrollEnabled={true} 
-  
-              />
-            </View>
+        {/* ✅ DOB INPUT + ICON */}
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
+          <TextInput
+            style={[styles.input, { flex: 1 }]}
+            placeholder="DD/MM/YYYY"
+            value={birthday}
+            onChangeText={handleDateChange}
+            keyboardType="numeric"
+            maxLength={10}
+          />
 
-            {/* Weight Row */}
-            <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 15, overflow: "visible", zIndex: 4000 }}>
-              <TextInput
-                style={[styles.input, { flex: 1, marginRight: 10, height: INPUT_HEIGHT }]}
-                placeholder="Weight"
-                placeholderTextColor="#aaa"
-                value={weight}
-                onChangeText={setWeight}
-                keyboardType="numeric"
-              />
-              <DropDownPicker
-                open={openWeight}
-                value={weightUnit}
-                items={weightUnits}
-                setOpen={(val) => {
-                  setOpenWeight(val);
-                  if (val) setOpenHeight(false);
-                }}
-                setValue={setWeightUnit}
-                setItems={setWeightUnits}
-                containerStyle={{ width: 100, height: INPUT_HEIGHT }}
-                style={{ backgroundColor: "#2a2a2a", borderColor: "#555", height: INPUT_HEIGHT }}
-                dropDownContainerStyle={{ backgroundColor: "#2a2a2a", borderColor: "#555" }}
-                textStyle={{ color: "#fff", fontSize: 16 }}
-                nestedScrollEnabled={true}
-              />
-            </View>
+          <TouchableOpacity
+            onPress={() => setShowDatePicker(true)}
+            style={styles.calendarBtn}
+          >
+            <Text style={{ fontSize: 18 }}>📅</Text>
+          </TouchableOpacity>
+        </View>
 
-            <View style={styles.buttonWrapper}>
-              <Button title="Next" onPress={handleNext} color="#4CAF50" />
-            </View>
-          </>
-        ) : (
-          <>
-            <Text style={styles.heading}>Set Your Goals</Text>
-            <Text style={styles.label}>Target Weight (kg)</Text>
+        {error ? <Text style={{ color: "red" }}>{error}</Text> : null}
 
-            <TextInput
-              style={[styles.input, { height: INPUT_HEIGHT }]}
-              placeholder="Target Weight (kg)"
-              placeholderTextColor="#aaa"
-              value={targetWeight.toString()}
-              onChangeText={setTargetWeight}
-              keyboardType="numeric"
-            />
-
-            <Text style={styles.label}>Daily Steps Goal</Text>
-            <TextInput
-              style={[styles.input, { height: INPUT_HEIGHT }]}
-              placeholder="Daily Steps Goal"
-              placeholderTextColor="#aaa"
-              value={stepsGoal.toString()}
-              onChangeText={(val) => setStepsGoal(val)}
-              keyboardType="numeric"
-            />
-
-            {stepsGoal ? (
-              <View style={{ marginVertical: 10 }}>
-                <Text style={{ color: "#fff" }}>Distance: {distanceFromSteps(Number(stepsGoal))} km</Text>
-                <Text style={{ color: "#fff" }}>Calories Burned: {caloriesFromSteps(Number(stepsGoal), Number(weight))} kcal</Text>
-              </View>
-            ) : null}
-
-            <View style={styles.buttonWrapper}>
-              <Button title="Save & Finish" onPress={handleSave} color="#4CAF50" />
-            </View>
-          </>
+        {showDatePicker && (
+          <DateTimePicker
+            value={new Date()}
+            mode="date"
+            maximumDate={new Date()}
+            onChange={(e, d) => {
+              setShowDatePicker(false);
+              if (d) {
+                const formatted =
+                  `${String(d.getDate()).padStart(2, "0")}/` +
+                  `${String(d.getMonth() + 1).padStart(2, "0")}/` +
+                  d.getFullYear();
+                setBirthday(formatted);
+              }
+            }}
+          />
         )}
+
+        {/* ✅ HEIGHT (FIXED OVERLAP) */}
+        <View style={{ zIndex: openHeight ? 2000 : 1 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 15 }}>
+            <TextInput
+              style={[styles.input, { flex: 1, marginRight: 10 }]}
+              placeholder="Height"
+              value={height}
+              onChangeText={setHeight}
+              keyboardType="numeric"
+            />
+
+            <DropDownPicker
+              open={openHeight}
+              value={heightUnit}
+              items={[
+                { label: "cm", value: "cm" },
+                { label: "ft", value: "ft" }
+              ]}
+              setOpen={(val) => {
+                setOpenHeight(val);
+                setOpenWeight(false);
+              }}
+              setValue={setHeightUnit}
+              containerStyle={{ width: 100 }}
+              zIndex={3000}
+              style={{
+    backgroundColor: "#2a2a2a",
+    borderColor: "#555",
+  }}
+  dropDownContainerStyle={{
+    backgroundColor: "#2a2a2a",
+    borderColor: "#555",
+  }}
+  textStyle={{ color: "#fff" }}
+            />
+          </View>
+        </View>
+
+        {/* ✅ WEIGHT (FIXED OVERLAP) */}
+        <View style={{ zIndex: openWeight ? 1000 : 1 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 15 }}>
+            <TextInput
+              style={[styles.input, { flex: 1, marginRight: 10 }]}
+              placeholder="Weight"
+              value={weight}
+              onChangeText={setWeight}
+              keyboardType="numeric"
+            />
+
+            <DropDownPicker
+              open={openWeight}
+              value={weightUnit}
+              items={[
+                { label: "kg", value: "kg" },
+                { label: "lbs", value: "lbs" }
+              ]}
+              setOpen={(val) => {
+                setOpenWeight(val);
+                setOpenHeight(false);
+              }}
+              setValue={setWeightUnit}
+              containerStyle={{ width: 100 }}
+              zIndex={2000}
+              style={{
+    backgroundColor: "#2a2a2a",
+    borderColor: "#555",
+  }}
+  dropDownContainerStyle={{
+    backgroundColor: "#2a2a2a",
+    borderColor: "#555",
+  }}
+  textStyle={{ color: "#fff" }}
+            />
+          </View>
+        </View>
+
+       <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
+  <Text style={styles.saveText}>Save </Text>
+</TouchableOpacity>
+
       </View>
-  </KeyboardAwareScrollView>
+    </KeyboardAwareScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flexGrow: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#121212", padding: 20 },
-  formBox: {
-    width: "100%",
-    backgroundColor: "#1e1e1e",
-    borderRadius: 15,
-    borderWidth: 1,
-    borderColor: "#444",
-    padding: 20,
-    minHeight: 500,
-    justifyContent: "center",
-    shadowColor: "#000",
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 5
-  },
-  heading: { fontSize: 22, marginBottom: 20, textAlign: "center", color: "#fff", fontWeight: "bold" },
-  input: { borderWidth: 1, borderColor: "#555", backgroundColor: "#2a2a2a", color: "#fff", padding: 12, marginBottom: 15, borderRadius: 10, fontSize: 16 },
-  buttonWrapper: { marginTop: 10, borderRadius: 10, overflow: "hidden" },
-  label: {
-  color: "#ccc",          // light grey for dark theme
-  fontSize: 16,           // slightly smaller than heading
-  fontWeight: "600",      // semi-bold
-  marginBottom: 5,        // spacing between label and input
-  marginLeft: 2           // optional: align with input nicely
+  container: { flexGrow: 1, justifyContent: "center", padding: 20, backgroundColor: "#121212" },
+  formBox: { backgroundColor: "#1e1e1e", padding: 20, borderRadius: 15 },
+  heading: { fontSize: 22, color: "#fff", marginBottom: 20, textAlign: "center" },
+  input: { backgroundColor: "#2a2a2a", color: "#fff", padding: 12, borderRadius: 10, marginBottom: 15 },
+  saveBtn: {
+  backgroundColor: "#4CAF50",
+  padding: 14,
+  borderRadius: 12, // ✅ curved corners
+  alignItems: "center",
+  marginTop: 10,
 },
+saveText: {
+  color: "#fff",
+  fontWeight: "600",
+  fontSize: 16,
+},
+  calendarBtn: {
+    marginLeft: 10,
+    backgroundColor: "#2a2a2a",
+    padding: 12,
+    borderRadius: 10
+  }
+
 });

@@ -15,8 +15,6 @@ const avatars = [
   require("../../assets/avatar4.png"),
   require("../../assets/avatar5.png"),
   require("../../assets/avatar6.png"),
-  require("../../assets/avatar7.png"),
-  require("../../assets/avatar8.png"),
 ];
 
 const Profile = ({ navigation }) => {

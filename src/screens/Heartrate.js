@@ -58,7 +58,6 @@ const Heartrate = () => {
     fetchProfile();
   }, []);
 
-  // 🔥 FETCH HEART DATA
   useEffect(() => {
     const user = auth.currentUser;
     if (!user) {
